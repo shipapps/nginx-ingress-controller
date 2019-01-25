@@ -1,0 +1,140 @@
+assets:
+  v1:
+    - github:
+        dest: ../base
+        repo: kubernetes/ingress-nginx
+        path: deploy/provider/cloud-generic.yaml
+        ref: nginx-0.22.0
+        proxy: false
+        strip_path: true
+        when: '{{repl ConfigOptionEquals "cloud_provider" "dfm"}}'
+    - github:
+        dest: ../base
+        repo: kubernetes/ingress-nginx
+        path: deploy/provider/aws/service-l4.yaml
+        ref: nginx-0.22.0
+        proxy: false
+        strip_path: true
+        when: '{{repl and (ConfigOptionEquals "cloud_provider" "aws") (ConfigOptionEquals "elb_nlb" "elb") (ConfigOptionEquals "layer4_7" "layer_4")}}'
+    - github:
+        dest: ../base
+        repo: kubernetes/ingress-nginx
+        path: deploy/provider/aws/patch-configmap-l4.yaml
+        ref: nginx-0.22.0
+        proxy: false
+        strip_path: true
+        when: '{{repl and (ConfigOptionEquals "cloud_provider" "aws") (ConfigOptionEquals "elb_nlb" "elb") (ConfigOptionEquals "layer4_7" "layer_4")}}'
+
+config:
+  v1:
+    - name: cluster_info
+      title: Kubernetes Cluster Provider
+      items:
+        - name: cluster_provider
+          title: Where will this controller be running?
+          type: select_one
+          default: aws
+          items:
+            - name: dfm
+              title: Docker For Mac
+            - name: aws
+              title: AWS
+            - name: gce
+              title: GCE/GKE
+            - name: azure
+              title: Azure
+            - name: metal
+              title: Bare Metal
+    - name: aws
+      title: AWS Options
+      when: '{{repl ConfigOptionEquals "cluster_provider" "aws"}}'
+      items:
+        - name: elb_nlb
+          title: Provide as an ELB or a NLB?
+          help_text: |
+            In AWS we use an Elastic Load Balancer (ELB) to expose the NGINX Ingress controller behind a Service of Type=LoadBalancer. Since Kubernetes v1.9.0 it is possible to use a classic load balancer (ELB) or network load balancer (NLB) Please check the elastic load balancing AWS details page
+          type: select_one
+          default: elb
+          items:
+            - name: elb
+              title: ELB
+            - name: nlb
+              title: NLB
+        - name: layer4_7
+          title: Layer 4 or Layer 7?
+          help_text: |
+            This setup requires to choose in which layer (L4 or L7) we want to configure the ELB:
+
+            - Layer 4: use TCP as the listener protocol for ports 80 and 443.
+            - Layer 7: use HTTP as the listener protocol for port 80 and terminate TLS in the ELB
+
+          type: select_one
+          default: layer_4
+          items:
+            - name: layer_4
+              title: Layer 4
+            - name: layer_7
+              title: Layer 7
+
+lifecycle:
+  v1:
+    - message:
+        contents: |
+          <img src="https://avatars0.githubusercontent.com/u/1412239?s=200&v=4" alt="Nginx Ingress Controller">
+
+          # Nginx Ingress Controller
+
+          **This Ship App will help you prepare a GitOps-friendly, production grade version of the Nginx Ingress Controller to a Kubernetes cluster.**
+
+          At the end of this setup, you'll have a deployable Kubernetes YAML that can be commited to a GitOps repo or deployed using existing tools. If you don't already have an automated
+          way to deploy to your Kubernetes cluster, we recommend using [Weave Flux](https://github.com/weaveworks/flux). There is also a [Weave Flux Ship App](https://github.com/shipapps/flux)
+          available to help provision and manage Flux.
+
+    - config:
+        invalidates: ["render"]
+
+    - message:
+        id: secret-warning
+        requires: ["config"]
+        contents: |
+          {{repl if (and (ConfigOptionEquals "cloud_provider" "aws") (ConfigOptionEquals "elb_nlb" "elb") (ConfigOptionEquals "layer4_7" "layer_4"))}}
+          # <img src="https://www.materialui.co/materialIcons/alert/warning_amber_36x36.png" /> Warning
+
+          You've selected to prepare the Nginx Ingress Controller for AWS using Layer 4. This will use TCP as the listener protocol for ports 80 and 443.
+
+          Check that no change is necessary with regards to the ELB idle timeout. In some scenarios, users may want to modify the ELB idle timeout, so please check the [ELB Idle Timeouts section](https://kubernetes.github.io/ingress-nginx/deploy/#elb-idle-timeouts) for additional information. If a change is required, users will need to update the value of `service.beta.kubernetes.io/aws-load-balancer-connection-idle-timeout` in the file `service-l4.yaml`.
+
+          {{repl end}}
+
+          **Click the Confirm button to continue, or else click Back to change your selection.**
+
+    - render:
+        requires: ["config"]
+        root: .
+
+    - kustomizeIntro: {}
+
+    - kustomize:
+        requires: ["render"]
+        base: base
+        overlay: overlays/ship
+        dest: nginx-ingress-controller.yaml
+
+    - message:
+        id: outro
+        contents: >-
+          ## Deploy
+
+          The Nginx Ingress Controller is ready to be deployed. To deploy it now, you can run:
+
+            kubectl apply -f nginx-ingress-controller.yaml
+
+          ## Updates
+
+          Ship can now watch for any changes made to the Nginx Ingress Controller and can download them, apply your patches, and create an updated version of the rendered.yaml. To watch for updates:
+
+            ship watch && ship update
+
+          Running this command in the current directory will automate the process of downloading and preparing updates.
+
+          For continuous notification and preparation of application updates via email, webhook or automated pull request, create a free account at https://www.replicated.com/ship.
