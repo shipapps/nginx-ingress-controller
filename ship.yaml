@@ -1,13 +1,24 @@
 assets:
   v1:
     - github:
+        dest: ../base/common
+        repo: kubernetes/ingress-nginx
+        path: deploy/mandatory.yaml
+        ref: nginx-0.22.0
+        proxy: false
+        strip_path: true
+
+    ## Docker for mac
+    - github:
         dest: ../base
         repo: kubernetes/ingress-nginx
         path: deploy/provider/cloud-generic.yaml
         ref: nginx-0.22.0
         proxy: false
         strip_path: true
-        when: '{{repl ConfigOptionEquals "cloud_provider" "dfm"}}'
+        when: '{{repl ConfigOptionEquals "cluster_provider" "dfm"}}'
+
+    ## AWS Specific (ELB + Layer 4)
     - github:
         dest: ../base
         repo: kubernetes/ingress-nginx
@@ -15,15 +26,63 @@ assets:
         ref: nginx-0.22.0
         proxy: false
         strip_path: true
-        when: '{{repl and (ConfigOptionEquals "cloud_provider" "aws") (ConfigOptionEquals "elb_nlb" "elb") (ConfigOptionEquals "layer4_7" "layer_4")}}'
+        when: '{{repl and (ConfigOptionEquals "cluster_provider" "aws") (ConfigOptionEquals "elb_nlb" "elb") (ConfigOptionEquals "layer4_7" "layer_4")}}'
     - github:
-        dest: ../base
+        dest: ./overlays/cloud/kustomization.yaml
         repo: kubernetes/ingress-nginx
         path: deploy/provider/aws/patch-configmap-l4.yaml
         ref: nginx-0.22.0
         proxy: false
         strip_path: true
-        when: '{{repl and (ConfigOptionEquals "cloud_provider" "aws") (ConfigOptionEquals "elb_nlb" "elb") (ConfigOptionEquals "layer4_7" "layer_4")}}'
+        when: '{{repl and (ConfigOptionEquals "cluster_provider" "aws") (ConfigOptionEquals "elb_nlb" "elb") (ConfigOptionEquals "layer4_7" "layer_4")}}'
+    - inline:
+        dest: ./overlays/cloud/kustomization.yaml
+        when: '{{repl and (ConfigOptionEquals "cluster_provider" "aws") (ConfigOptionEquals "elb_nlb" "elb") (ConfigOptionEquals "layer4_7" "layer_4")}}'
+        contents: |
+          base:
+            - ../../base
+          patches:
+            - ./patch-configmap-l4.yaml
+
+    ## AWS Specific (ELB + Layer 7)
+    - github:
+        dest: ../base
+        repo: kubernetes/ingress-nginx
+        path: deploy/provider/aws/service-l7.yaml
+        ref: nginx-0.22.0
+        proxy: false
+        strip_path: true
+        when: '{{repl and (ConfigOptionEquals "cluster_provider" "aws") (ConfigOptionEquals "elb_nlb" "elb") (ConfigOptionEquals "layer4_7" "layer_7")}}'
+    - github:
+        dest: ./overlays/cloud/kustomization.yaml
+        repo: kubernetes/ingress-nginx
+        path: deploy/provider/aws/patch-configmap-l7.yaml
+        ref: nginx-0.22.0
+        proxy: false
+        strip_path: true
+        when: '{{repl and (ConfigOptionEquals "cluster_provider" "aws") (ConfigOptionEquals "elb_nlb" "elb") (ConfigOptionEquals "layer4_7" "layer_7")}}'
+    - inline:
+        dest: ./overlays/cloud/kustomization.yaml
+        when: '{{repl and (ConfigOptionEquals "cluster_provider" "aws") (ConfigOptionEquals "elb_nlb" "elb") (ConfigOptionEquals "layer4_7" "layer_7")}}'
+        contents: |
+          base:
+            - ../../base
+          patches:
+            - ./patch-configmap-l7.yaml
+
+    ## GKE and GCE - Nothing cloud specific
+
+    ## Azure - Nothing cloud specific
+
+    ## Bare metal
+    - github:
+        dest: ../base
+        repo: kubernetes/ingress-nginx
+        path: deploy/provider/baremetal/service-nodeport.yaml
+        ref: nginx-0.22.0
+        proxy: false
+        strip_path: true
+        when: '{{repl ConfigOptionEquals "cluster_provider" "metal"}}'
 
 config:
   v1:
@@ -94,15 +153,42 @@ lifecycle:
         invalidates: ["render"]
 
     - message:
-        id: secret-warning
+        id: cloud-instructions
         requires: ["config"]
         contents: |
-          {{repl if (and (ConfigOptionEquals "cloud_provider" "aws") (ConfigOptionEquals "elb_nlb" "elb") (ConfigOptionEquals "layer4_7" "layer_4"))}}
+          {{repl if (and (ConfigOptionEquals "cluster_provider" "aws") (ConfigOptionEquals "elb_nlb" "elb") (ConfigOptionEquals "layer4_7" "layer_4"))}}
           # <img src="https://www.materialui.co/materialIcons/alert/warning_amber_36x36.png" /> Warning
 
           You've selected to prepare the Nginx Ingress Controller for AWS using Layer 4. This will use TCP as the listener protocol for ports 80 and 443.
 
           Check that no change is necessary with regards to the ELB idle timeout. In some scenarios, users may want to modify the ELB idle timeout, so please check the [ELB Idle Timeouts section](https://kubernetes.github.io/ingress-nginx/deploy/#elb-idle-timeouts) for additional information. If a change is required, users will need to update the value of `service.beta.kubernetes.io/aws-load-balancer-connection-idle-timeout` in the file `service-l4.yaml`.
+
+          *Please Note: An idle timeout of 3600s is recommended when using WebSockets.*
+          {{repl else if (and (ConfigOptionEquals "cluster_provider" "aws") (ConfigOptionEquals "elb_nlb" "elb") (ConfigOptionEquals "layer4_7" "layer_4"))}}
+          # <img src="https://www.materialui.co/materialIcons/alert/warning_amber_36x36.png" /> Warning
+
+          You've selected to prepare the Nginx Ingress Controller for AWS using Layer 7. This will use TCP as the listener protocol for port 80 and will terminate TLS in the ELB.
+
+          **Required Change**
+          On the next screen, you'll see the generated YAML. Find the file `service-l7.yaml` and replace the placeholder id with a valid one from your account. The placeholder generated is `arn:aws:acm:us-west-2:XXXXXXXX:certificate/XXXXXX-XXXXXXX-XXXXXXX-XXXXXXXX`.
+
+          Check that no change is necessary with regards to the ELB idle timeout. In some scenarios, users may want to modify the ELB idle timeout, so please check the [ELB Idle Timeouts section](https://kubernetes.github.io/ingress-nginx/deploy/#elb-idle-timeouts) for additional information. If a change is required, users will need to update the value of `service.beta.kubernetes.io/aws-load-balancer-connection-idle-timeout` in the file `service-l7.yaml`.
+
+          *Please Note: An idle timeout of 3600s is recommended when using WebSockets.*
+
+          {{repl else if (ConfigOptionEquals "cluster_provider" "gce"}}
+
+          **Important Note:** proxy protocol is not supported in GCE/GKE
+
+          {{repl else if (ConfigOptionEquals "cluster_provider" "metal"}}
+          # Bare Metal Considerations
+
+          In traditional *cloud* environments, where network load balancers are available on-demand, a single Kubernetes manifest suffices to provide a single point of contact to the NGINX Ingress controller to external clients and, indirectly, to any application running inside the cluster. *Bare-metal* environments lack this commodity, requiring a slightly different setup to offer the same kind of access to external consumers.
+
+          <img src="https://kubernetes.github.io/ingress-nginx/images/baremetal/cloud_overview.jpg" /><br />
+          <img src="https://kubernetes.github.io/ingress-nginx/images/baremetal/baremetal_overview.jpg" />
+
+          [Visit the documentation](https://kubernetes.github.io/ingress-nginx/deploy/baremetal/) for a few recommended approaches to deploying the NGINX Ingress controller inside a Kubernetes cluster running on bare-metal.
 
           {{repl end}}
 
@@ -116,7 +202,8 @@ lifecycle:
 
     - kustomize:
         requires: ["render"]
-        base: base
+        ## The AWS Implementation ships with a patch that patches a configmap from the mandatory multi-doc yaml
+        base: '{{repl if (ConfigOptionEquals "cluster_provider" "aws")}}overlays/cloud{{repl else}}base{{repl end}}'
         overlay: overlays/ship
         dest: nginx-ingress-controller.yaml
 
@@ -127,13 +214,17 @@ lifecycle:
 
           The Nginx Ingress Controller is ready to be deployed. To deploy it now, you can run:
 
-            kubectl apply -f nginx-ingress-controller.yaml
+          ```
+          kubectl apply -f nginx-ingress-controller.yaml
+          ```
 
           ## Updates
 
           Ship can now watch for any changes made to the Nginx Ingress Controller and can download them, apply your patches, and create an updated version of the rendered.yaml. To watch for updates:
 
-            ship watch && ship update
+          ```
+          ship watch && ship update
+          ```
 
           Running this command in the current directory will automate the process of downloading and preparing updates.
 
